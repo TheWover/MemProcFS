@@ -357,7 +357,7 @@ LPCSTR szMMINIDUMP_README =
 LPCSTR szMMINIDUMP_SECURITY =
 "Security information relating to the mindump module                          \n" \
 "===================================================                          \n" \
-"MemProcFS does not generate a minidump file for LSASS.EXE due to potential security concerns.\n";
+"[Untruth!] MemProcFS does not generate a minidump file for LSASS.EXE due to potential security concerns.\n";
 
 
 typedef struct tdOB_M_MINIDUMP_CONTEXT {
@@ -999,11 +999,6 @@ POB_M_MINIDUMP_CONTEXT M_MiniDump_Initialize_Internal(_In_ VMM_HANDLE H, _In_ VM
     ctx->qwLastAccessTickCount64 = GetTickCount64();
     if(H->dev.fVolatile || !(ctx->qwTimeUpdate = VmmProcess_GetCreateTimeOpt(H, pProcess))) {
         GetSystemTimeAsFileTime((PFILETIME)&ctx->qwTimeUpdate);
-    }
-
-    // ensure the generated file is ok security wise:
-    if(!strcmp(pProcess->szName, "lsass.exe")) {
-        ctx->fDisabledSecurity = TRUE;
     }
 
     // finish
