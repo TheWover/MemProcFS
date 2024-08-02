@@ -115,7 +115,7 @@ VmmPycSearch_add_search(PyObj_Search *self, PyObject *args)
     DWORD cbAlign = 1, iSearch = 0;
     if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "VmmSearch.add_search(): Not initialized."); }
     if(self->fStarted) { return PyErr_Format(PyExc_RuntimeError, "VmmSearch.add_search(): Search already started."); }
-    if(self->ctxSearch.cSearch >= VMMDLL_MEM_SEARCH_MAX) { return PyErr_Format(PyExc_RuntimeError, "VmmSearch.add_search(): Too many searches."); }
+    if(self->ctxSearch.cSearch >= PYOBJ_SEARCH_MAXENTRIES) { return PyErr_Format(PyExc_RuntimeError, "VmmSearch.add_search(): Too many searches. (Max supported: %i)", PYOBJ_SEARCH_MAXENTRIES); }
     if(!PyArg_ParseTuple(args, "|y#y#I", &pbSearch, &cbSearch, &pbMask, &cbMask, &cbAlign)) {
         PyErr_Clear();
         if(!PyArg_ParseTuple(args, "|y#OI", &pbSearch, &cbSearch, &pyObject, &cbAlign)) {
@@ -137,11 +137,11 @@ VmmPycSearch_add_search(PyObj_Search *self, PyObject *args)
     }
     iSearch = self->ctxSearch.cSearch;
     self->ctxSearch.cSearch++;
-    self->ctxSearch.search[iSearch].cbAlign = cbAlign;
-    self->ctxSearch.search[iSearch].cb = (DWORD)cbSearch;
-    memcpy(self->ctxSearch.search[iSearch].pb, pbSearch, cbSearch);
+    self->ctxSearch.pSearch[iSearch].cbAlign = cbAlign;
+    self->ctxSearch.pSearch[iSearch].cb = (DWORD)cbSearch;
+    memcpy(self->ctxSearch.pSearch[iSearch].pb, pbSearch, cbSearch);
     if(cbMask) {
-        memcpy(self->ctxSearch.search[iSearch].pbSkipMask, pbMask, cbMask);
+        memcpy(self->ctxSearch.pSearch[iSearch].pbSkipMask, pbMask, cbMask);
     }
     return PyLong_FromUnsignedLong(iSearch);
 }
@@ -264,6 +264,62 @@ VmmPycSearch_max_results_set(PyObj_Search *self, PyObject *value, void *closure)
     return 0;
 }
 
+// -> STR
+static PyObject*
+VmmPycSearch_strategy_get(PyObj_Search *self, void *closure)
+{
+    if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "VmmSearch.strategy: Not initialized."); }
+    if(self->ctxSearch.fForcePTE) {
+        return PyUnicode_FromString("pte");
+    }
+    if(self->ctxSearch.fForceVAD) {
+        return PyUnicode_FromString("vad");
+    }
+    return PyUnicode_FromString("default");
+}
+
+// STR ->
+static int
+VmmPycSearch_strategy_set(PyObj_Search *self, PyObject *value, void *closure)
+{
+    PyObject *pyBytes;
+    LPSTR szStrategy;
+    if(!self->fValid) {
+        PyErr_SetString(PyExc_TypeError, "VmmSearch.strategy: Not initialized.");
+        return -1;
+    }
+    if(!PyUnicode_Check(value)) {
+        PyErr_SetString(PyExc_TypeError, "VmmSearch.strategy: Invalid type.");
+        return -1;
+    }
+    if(self->fStarted) {
+        PyErr_SetString(PyExc_TypeError, "VmmSearch.max_results: Already started.");
+        return -1;
+    }
+    pyBytes = PyUnicode_AsEncodedString(value, NULL, NULL);
+    if(!pyBytes) {
+        PyErr_SetString(PyExc_TypeError, "VmmSearch.strategy: Invalid type.");
+        return -1;
+    }
+    szStrategy = PyBytes_AsString(pyBytes);
+    if(!_stricmp(szStrategy, "pte")) {
+        self->ctxSearch.fForcePTE = TRUE;
+        self->ctxSearch.fForceVAD = FALSE;
+    } else if (!_stricmp(szStrategy, "vad")) {
+        self->ctxSearch.fForcePTE = FALSE;
+        self->ctxSearch.fForceVAD = TRUE;
+    } else if (!_stricmp(szStrategy, "default")) {
+        self->ctxSearch.fForcePTE = FALSE;
+        self->ctxSearch.fForceVAD = FALSE;
+    } else {
+        PyErr_SetString(PyExc_TypeError, "VmmSearch.strategy: Invalid strategy.");
+        Py_DECREF(pyBytes);
+        return -1;
+    }
+    Py_DECREF(pyBytes);
+    return 0;
+}
+
 //-----------------------------------------------------------------------------
 // VmmPycSearch INITIALIZATION AND CORE FUNCTIONALITY BELOW:
 //-----------------------------------------------------------------------------
@@ -301,6 +357,8 @@ VmmPycSearch_InitializeInternal(_In_ PyObj_Vmm *pyVMM, _In_opt_ DWORD dwPID, _In
     pyObj->ctxSearch.ReadFlags = qwReadFlags;
     pyObj->ctxSearch.pvUserPtrOpt = pyObj;
     pyObj->ctxSearch.pfnResultOptCB = VmmPycSearch_SearchResultCB;
+    pyObj->ctxSearch.pSearch = pyObj->peSearch;
+    memset(pyObj->peSearch, 0, PYOBJ_SEARCH_MAXENTRIES * sizeof(VMMDLL_MEM_SEARCH_CONTEXT_SEARCHENTRY));
     // finish & return:
     pyObj->fValid = TRUE;
     return pyObj;
@@ -368,7 +426,8 @@ BOOL VmmPycSearch_InitializeType(PyObject *pModule)
         {"addr_max", (getter)VmmPycSearch_addr_max_get, (setter)VmmPycSearch_addr_max_set, "Max address to search.", NULL},
         {"addr_min", (getter)VmmPycSearch_addr_min_get, (setter)VmmPycSearch_addr_min_set, "Min address to search.", NULL},
         {"flags", (getter)VmmPycSearch_flags_get, (setter)VmmPycSearch_flags_set, "Read Flags.", NULL},
-        {"max_results", (getter)VmmPycSearch_max_results_get, (setter)VmmPycSearch_max_results_set, "Max address to search.", NULL},
+        {"max_results", (getter)VmmPycSearch_max_results_get, (setter)VmmPycSearch_max_results_set, "Maximum number of search results before search is stopped.", NULL},
+        {"strategy", (getter)VmmPycSearch_strategy_get, (setter)VmmPycSearch_strategy_set, "Search strategy.", NULL},
         {NULL}
     };
     static PyType_Slot PyTypeSlot[] = {

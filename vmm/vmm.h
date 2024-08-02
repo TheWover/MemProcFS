@@ -35,7 +35,7 @@
 #define VMM_STATUS_FILE_INVALID                 STATUS_FILE_INVALID
 #define VMM_STATUS_FILE_SYSTEM_LIMITATION       STATUS_FILE_SYSTEM_LIMITATION
 
-#define VMM_MEMMAP_ENTRIES_MAX                  0x4000
+#define VMM_MEMMAP_ENTRIES_MAX                  0x10000
 
 #define VMM_MEMMAP_PAGE_A                       0x0000000000000001
 #define VMM_MEMMAP_PAGE_W                       0x0000000000000002
@@ -1434,6 +1434,7 @@ typedef struct tdVMM_OFFSET_HEAP {
         } HEAP_SEG_CONTEXT;
         struct {
             WORD cb;
+            QWORD qwSignatureStaticKey;
         } HEAP_PAGE_SEGMENT;
         struct {
             WORD cb;
@@ -1510,10 +1511,21 @@ typedef NTSTATUS WINAPI VMMFN_RtlDecompressBuffer(
     PULONG FinalUncompressedSize
 );
 
+typedef NTSTATUS WINAPI VMMFN_RtlDecompressBufferEx(
+    USHORT CompressionFormat,
+    PUCHAR UncompressedBuffer,
+    ULONG  UncompressedBufferSize,
+    PUCHAR CompressedBuffer,
+    ULONG  CompressedBufferSize,
+    PULONG FinalUncompressedSize,
+    PVOID  WorkSpace
+);
+
 typedef struct tdVMM_DYNAMIC_LOAD_FUNCTIONS {
     // functions below may be loaded on startup
     // NB! null checks are required before use!
     VMMFN_RtlDecompressBuffer *RtlDecompressBufferOpt;     // ntdll.dll!RtlDecompressBuffer
+    VMMFN_RtlDecompressBufferEx *RtlDecompressBufferExOpt; // ntdll.dll!RtlDecompressBufferEx
 } VMM_DYNAMIC_LOAD_FUNCTIONS;
 
 // forward declarations of non-public types:
@@ -2042,8 +2054,6 @@ VOID VmmVirt2PhysGetInformation(_In_ VMM_HANDLE H, _Inout_ PVMM_PROCESS pProcess
 */
 PVMMOB_PHYS2VIRT_INFORMATION VmmPhys2VirtGetInformation(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In_ QWORD paTarget);
 
-#define VMM_MEMORY_SEARCH_MAX               16
-
 typedef struct tdVMM_MEMORY_SEARCH_CONTEXT_SEARCHENTRY {
     DWORD cbAlign;              // byte-align at 2^x - 0, 1, 2, 4, 8, 16, .. bytes.
     DWORD cb;                   // number of bytes to search (1-32).
@@ -2059,7 +2069,7 @@ typedef struct tdVMM_MEMORY_SEARCH_CONTEXT {
     BOOL fAbortRequested;       // may be set by caller to abort processing prematurely.
     DWORD cMaxResult;           // # max result entries. '0' = 1 entry. max 0x10000 entries.
     DWORD cSearch;              // number of valid search entries
-    VMM_MEMORY_SEARCH_CONTEXT_SEARCHENTRY search[VMM_MEMORY_SEARCH_MAX];
+    PVMM_MEMORY_SEARCH_CONTEXT_SEARCHENTRY pSearch;     // pointer to an array of cSearch entries.
     QWORD vaMin;                // min address to search (page-aligned).
     QWORD vaMax;                // max address to search (page-aligned), if 0 max memory is assumed.
     QWORD vaCurrent;            // current address (may be read by caller).

@@ -146,7 +146,7 @@ pub const FLAG_NO_PREDICTIVE_READ                   : u64 = 0x0400;
 /// This flag is only recommended for local files. improves forensic artifact order.
 pub const FLAG_FORCECACHE_READ_DISABLE              : u64 = 0x0800;
 /// Disable clearing of memory supplied to VmmScatterMemory.prepare_ex
-pub const VMMDLL_FLAG_SCATTER_PREPAREEX_NOMEMZERO   : u64 = 0x1000;
+pub const FLAG_SCATTER_PREPAREEX_NOMEMZERO          : u64 = 0x1000;
 /// Get/Set library console printouts.
 pub const CONFIG_OPT_CORE_PRINTF_ENABLE             : u64 = 0x4000000100000000;
 /// Get/Set standard verbosity.
@@ -1217,6 +1217,7 @@ impl VmmKernel<'_> {
 /// 
 /// # Created By
 /// - [`vmmprocess.pdb_from_module_address()`](VmmProcess::pdb_from_module_address())
+/// - [`vmmprocess.pdb_from_module_name()`](VmmProcess::pdb_from_module_name())
 /// - [`vmm.kernel().pdb()`](VmmKernel::pdb())
 /// 
 /// # Examples
@@ -1228,7 +1229,7 @@ impl VmmKernel<'_> {
 /// 
 /// ```
 /// // Retrieve the PDB struct associated with a process module.
-/// let pdb = vmmprocess.pdb("ntdll.dll")?;
+/// let pdb = vmmprocess.pdb_from_module_name("ntdll.dll")?;
 /// ```
 #[derive(Debug)]
 pub struct VmmPdb<'a> {
@@ -2589,6 +2590,24 @@ impl VmmProcess<'_> {
         return self.impl_pdb_from_module_address(va_module_base);
     }
 
+    /// Retrieve PDB debugging for the module.
+    /// 
+    /// PDB debugging most often only work on modules by Microsoft.
+    /// See [`VmmPdb`] documentation for additional information.
+    /// 
+    /// # Arguments
+    /// * `module_name`
+    /// 
+    /// # Examples
+    /// ```
+    /// if let Ok(pdb_kernel32) = vmmprocess.pdb_from_module_name("kernel32.dll") {
+    ///     println!("-> {pdb_kernel32}");
+    /// }
+    /// ```
+    pub fn pdb_from_module_name(&self, module_name : &str) -> ResultEx<VmmPdb> {
+        return self.impl_pdb_from_module_name(module_name);
+    }
+
     /// Retrieve a search struct for process virtual memory.
     /// 
     /// NB! This does not start the actual search yet.
@@ -3013,6 +3032,7 @@ pub struct VmmSearch<'a> {
     is_completed : bool,
     is_completed_success : bool,
     native_search : CVMMDLL_MEM_SEARCH_CONTEXT,
+    search_terms : Vec<CVMMDLL_MEM_SEARCH_CONTEXT_SEARCHENTRY>,
     thread : Option<std::thread::JoinHandle<bool>>,
     result : Vec<(u64, u32)>,
 }
@@ -3041,7 +3061,7 @@ pub struct VmmSearchResult {
     pub is_started : bool,
     /// Indicates that the search has been completed.
     pub is_completed : bool,
-    /// If is_completed is true this indicates if the search was completed successfully.
+    /// Indicates that the search has been completed successfully.
     pub is_completed_success : bool,
     /// Address to start searching from - default 0.
     pub addr_min : u64,
@@ -4570,9 +4590,14 @@ fn impl_new_from_virtual_machine<'a>(vmm_parent : &'a Vmm, vm_entry : &VmmMapVir
 //=============================================================================
 
 const MAX_PATH                          : usize = 260;
-const VMMDLL_MEM_SEARCH_VERSION         : u32 = 0xfe3e0002;
+const VMMDLL_MEM_SEARCH_VERSION         : u32 = 0xfe3e0003;
 const VMMDLL_YARA_CONFIG_VERSION        : u32 = 0xdec30001;
-const VMMYARA_RULE_MATCH_VERSION        : u32 = 0xfedc0003;
+const VMMYARA_RULE_MATCH_VERSION        : u32 = 0xfedc0005;
+const VMMYARA_RULE_MATCH_TAG_MAX        : usize = 27;
+const VMMYARA_RULE_MATCH_META_MAX       : usize = 32;
+const VMMYARA_RULE_MATCH_STRING_MAX     : usize = 16;
+const VMMYARA_RULE_MATCH_OFFSET_MAX     : usize = 24;
+
 const VMMDLL_VFS_FILELIST_VERSION       : u32 = 2;
 
 const VMMDLL_MAP_EAT_VERSION            : u32 = 3;
@@ -6663,6 +6688,11 @@ impl VmmProcess<'_> {
         return Ok(r);
     }
 
+    fn impl_pdb_from_module_name(&self, module_name : &str) -> ResultEx<VmmPdb> {
+        let va_module_base = self.get_module_base(module_name)?;
+        return self.impl_pdb_from_module_address(va_module_base);
+    }
+
     fn impl_pdb_from_module_address(&self, va_module_base : u64) -> ResultEx<VmmPdb> {
         let mut szModuleName = [0i8; MAX_PATH + 1];
         let r = (self.vmm.native.VMMDLL_PdbLoad)(self.vmm.native.h, self.pid, va_module_base, szModuleName.as_mut_ptr() as *mut c_char);
@@ -7346,6 +7376,9 @@ impl fmt::Display for VmmSearchResult {
     }
 }
 
+/// Maximum number of supported search terms.
+const CVMMDLL_MEM_SEARCH_CONTEXT_SEARCHENTRY_MAX : usize = 0x00100000;
+
 #[repr(C)]
 #[allow(non_snake_case, non_camel_case_types)]
 #[derive(Debug, Default)]
@@ -7365,7 +7398,7 @@ pub(crate) struct CVMMDLL_MEM_SEARCH_CONTEXT {
     fAbortRequested : u32,
     cMaxResult : u32,
     cSearch : u32,
-    search : [CVMMDLL_MEM_SEARCH_CONTEXT_SEARCHENTRY; 16],
+    pSearch : usize,
     vaMin : u64,
     vaMax : u64,
     vaCurrent : u64,
@@ -7418,6 +7451,8 @@ impl VmmSearch<'_> {
         if self.is_started == false {
             self.is_started = true;
             // ugly code below - but it works ...
+            self.native_search.cSearch = self.search_terms.len() as u32;
+            self.native_search.pSearch = self.search_terms.as_ptr() as usize;
             self.native_search.pvUserPtrOpt = std::ptr::addr_of!(self.result) as usize;
             let pid = self.pid;
             let native_h = self.vmm.native.h;
@@ -7458,30 +7493,33 @@ impl VmmSearch<'_> {
             return Err(anyhow!("search max address must be larger than min address"));
         }
         let result_vec = Vec::new();
-        let mut native = CVMMDLL_MEM_SEARCH_CONTEXT::default();
-        native.dwVersion = VMMDLL_MEM_SEARCH_VERSION;
-        native.vaMin = addr_min;
-        native.vaMax = addr_max;
-        native.ReadFlags = flags;
-        native.cMaxResult = num_results_max;
-        native.pfnResultOptCB = VmmSearch::impl_search_cb as usize;
-        native.pvUserPtrOpt = std::ptr::addr_of!(result_vec) as usize;
-        //let ptr = result_vec::as_mut_ptr;
+        let mut native_search = CVMMDLL_MEM_SEARCH_CONTEXT::default();
+        native_search.dwVersion = VMMDLL_MEM_SEARCH_VERSION;
+        native_search.vaMin = addr_min;
+        native_search.vaMax = addr_max;
+        native_search.ReadFlags = flags;
+        native_search.cMaxResult = num_results_max;
+        native_search.pfnResultOptCB = VmmSearch::impl_search_cb as usize;
+        native_search.pvUserPtrOpt = std::ptr::addr_of!(result_vec) as usize;
         return Ok(VmmSearch {
             vmm,
             pid,
             is_started : false,
             is_completed : false,
             is_completed_success : false,
-            native_search : native,
+            native_search,
+            search_terms : Vec::new(),
             thread : None,
             result : result_vec,
         });
     }
 
     fn impl_add_search(&mut self, search_bytes : &[u8], search_skipmask : Option<&[u8]>, byte_align : u32) -> ResultEx<u32> {
-        if self.native_search.cSearch as usize >= self.native_search.search.len() {
-            return Err(anyhow!("Search max terms reached."));
+        if self.is_started || self.is_completed {
+            return Err(anyhow!("Search cannot add terms to an already started/completed search."));
+        }
+        if self.search_terms.len() >= CVMMDLL_MEM_SEARCH_CONTEXT_SEARCHENTRY_MAX {
+            return Err(anyhow!("Search max terms ({}) reached.", CVMMDLL_MEM_SEARCH_CONTEXT_SEARCHENTRY_MAX));
         }
         if (search_bytes.len() == 0) || (search_bytes.len() > 32) {
             return Err(anyhow!("Search invalid length: search_bytes."));
@@ -7496,15 +7534,15 @@ impl VmmSearch<'_> {
                 return Err(anyhow!("Search invalid length: search_skipmask."));
             }
         }
-        let term = &mut self.native_search.search[self.native_search.cSearch as usize];
+        let mut term = CVMMDLL_MEM_SEARCH_CONTEXT_SEARCHENTRY::default();
         term.cbAlign = byte_align;
         term.cb = search_bytes.len() as u32;
         term.pb[0..search_bytes.len()].copy_from_slice(search_bytes);
         if let Some(search_skipmask) = search_skipmask {
             term.pbSkipMask[0..search_skipmask.len()].copy_from_slice(search_skipmask);
         }
-        let result_index = self.native_search.cSearch;
-        self.native_search.cSearch += 1;
+        let result_index = self.search_terms.len() as u32;
+        self.search_terms.push(term);
         return Ok(result_index);
     }
 
@@ -7565,7 +7603,7 @@ struct CVMMDLL_VMMYARA_RULE_MATCH_META {
 struct CVMMDLL_VMMYARA_RULE_MATCH_STRINGS {
     szString : *const c_char,
     cMatch : u32,
-    cbMatchOffset : [usize; 16],
+    cbMatchOffset : [usize; VMMYARA_RULE_MATCH_OFFSET_MAX],
 }
 
 #[repr(C)]
@@ -7576,11 +7614,11 @@ struct CVMMDLL_VMMYARA_RULE_MATCH {
     flags : u32,
     szRuleIdentifier : *const c_char,
     cTags : u32,
-    szTags : [*const c_char; 8],
+    szTags : [*const c_char; VMMYARA_RULE_MATCH_TAG_MAX],
     cMeta : u32,
-    meta : [CVMMDLL_VMMYARA_RULE_MATCH_META; 16],
+    meta : [CVMMDLL_VMMYARA_RULE_MATCH_META; VMMYARA_RULE_MATCH_META_MAX],
     cStrings : u32,
-    strings : [CVMMDLL_VMMYARA_RULE_MATCH_STRINGS; 8],
+    strings : [CVMMDLL_VMMYARA_RULE_MATCH_STRINGS; VMMYARA_RULE_MATCH_STRING_MAX],
 }
 
 #[repr(C)]
@@ -7741,14 +7779,14 @@ impl VmmYara<'_> {
             let rule = cstr_to_string((*yrm).szRuleIdentifier);
             // tags:
             let mut tags = Vec::new();
-            let ctags = std::cmp::min((*yrm).cTags as usize, 8);
+            let ctags = std::cmp::min((*yrm).cTags as usize, VMMYARA_RULE_MATCH_TAG_MAX);
             for i in 0..ctags {
                 let tag = cstr_to_string((*yrm).szTags[i]);
                 tags.push(tag);
             }
             // meta:
             let mut meta = Vec::new();
-            let cmeta = std::cmp::min((*yrm).cMeta as usize, 16);
+            let cmeta = std::cmp::min((*yrm).cMeta as usize, VMMYARA_RULE_MATCH_META_MAX);
             for i in 0..cmeta {
                 let key = cstr_to_string((*yrm).meta[i].szIdentifier);
                 let value = cstr_to_string((*yrm).meta[i].szString);
@@ -7756,10 +7794,10 @@ impl VmmYara<'_> {
             }
             // match_strings:
             let mut match_strings = Vec::new();
-            let cmatch_strings = std::cmp::min((*yrm).cStrings as usize, 8);
+            let cmatch_strings = std::cmp::min((*yrm).cStrings as usize, VMMYARA_RULE_MATCH_STRING_MAX);
             for i in 0..cmatch_strings {
                 let match_string = cstr_to_string((*yrm).strings[i].szString);
-                let cmatch = std::cmp::min((*yrm).strings[i].cMatch as usize, 16);
+                let cmatch = std::cmp::min((*yrm).strings[i].cMatch as usize, VMMYARA_RULE_MATCH_OFFSET_MAX);
                 let mut addresses = Vec::new();
                 for j in 0..cmatch {
                     let offset = (*yrm).strings[i].cbMatchOffset[j] as u64;

@@ -20,6 +20,7 @@
 #define STATUS_FILE_SYSTEM_LIMITATION       ((NTSTATUS)0xC0000427L)
 typedef unsigned __int64                    QWORD, *PQWORD;
 _Ret_maybenull_ HMODULE WINAPI LoadLibraryU(_In_ LPCSTR lpLibFileName);
+int LZ4_decompress_safe(const char *src, char *dst, int compressedSize, int dstCapacity);
 
 #ifdef _WIN64
 #define VMM_64BIT
@@ -29,6 +30,7 @@ _Ret_maybenull_ HMODULE WINAPI LoadLibraryU(_In_ LPCSTR lpLibFileName);
 
 #endif /* _WIN32 */
 #ifdef LINUX
+#define _FILE_OFFSET_BITS 64
 
 #if __SIZEOF_POINTER__ == 8
 #define VMM_64BIT
@@ -56,6 +58,7 @@ _Ret_maybenull_ HMODULE WINAPI LoadLibraryU(_In_ LPCSTR lpLibFileName);
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <lz4.h>
 #undef  AF_INET6
 #define AF_INET6 23
 
@@ -128,6 +131,8 @@ typedef int(*_CoreCrtNonSecureSearchSortCompareFunction)(void const *, void cons
 #define STATUS_END_OF_FILE                  ((NTSTATUS)0xC0000011L)
 #define STATUS_FILE_INVALID                 ((NTSTATUS)0xC0000098L)
 #define STATUS_FILE_SYSTEM_LIMITATION       ((NTSTATUS)0xC0000427L)
+#define COMPRESSION_FORMAT_XPRESS           (0x0003)   
+#define COMPRESSION_FORMAT_XPRESS_HUFF      (0x0004)
 
 //-----------------------------------------------------------------------------
 // SAL DEFINES BELOW:
@@ -199,10 +204,10 @@ typedef int(*_CoreCrtNonSecureSearchSortCompareFunction)(void const *, void cons
 #define ExitProcess(c)                      (exit(c ? EXIT_SUCCESS : EXIT_FAILURE))
 #define Sleep(dwMilliseconds)               (usleep(1000*dwMilliseconds))
 #define _fsopen(szFile, szMode, dwAttr)     fopen(szFile, szMode)
-#define fopen_s(ppFile, szFile, szAttr)     ((*ppFile = fopen64(szFile, szAttr)) ? 0 : 1)
+#define fopen_s(ppFile, szFile, szAttr)     ((*ppFile = fopen(szFile, szAttr)) ? 0 : 1)
 #define ZeroMemory(pb, cb)                  (memset(pb, 0, cb))
-#define _ftelli64(f)                        (ftello64(f))
-#define _fseeki64(f, o, w)                  (fseeko64(f, o, w))
+#define _ftelli64(f)                        (ftello(f))
+#define _fseeki64(f, o, w)                  (fseeko(f, o, w))
 #define _chsize_s(fd, cb)                   (ftruncate64(fd, cb))
 #define _fileno(f)                          (fileno(f))
 #define InterlockedAdd64(p, v)              (__sync_add_and_fetch_8(p, v))
