@@ -1,6 +1,6 @@
 MemProcFS:
 ===============================
-[This is a fork that allows dumping LSASS.]
+[This is a fork that allows reading LSASS memory dumps.]
 
 MemProcFS is an easy and convenient way of viewing physical memory as files in a virtual file system. 
 
